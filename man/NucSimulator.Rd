@@ -4,7 +4,9 @@
 \alias{NucSimulator}
 \title{Simulate DNA under General-Time Reversible model}
 \usage{
-NucSimulator(phy, pars, nsites, nuc.model, base.freqs, ncats)
+NucSimulator(phy, pars, nsites, nuc.model, base.freqs,
+  include.gamma = TRUE, gamma.type = "median", ncats = 4,
+  start.vals_array = NULL, user.rate.cats = NULL, user.rates = NULL)
 }
 \arguments{
 \item{phy}{The phylogenetic tree with branch lengths.}
@@ -17,19 +19,21 @@ NucSimulator(phy, pars, nsites, nuc.model, base.freqs, ncats)
 
 \item{base.freqs}{The base frequencies for A C G T (in that order).}
 
+\item{include.gamma}{Boolean on whether to use a gamma model}
+
+\item{gamma.type}{How the gamma bins are used}
+
 \item{ncats}{The number of discrete gamma categories.}
+
+\item{start.vals_array}{A vector of nucleotides to be used as the starting nucleotide for each site in the simulation.}
+
+\item{user.rate.cats}{The user supplied gamma categories to use instead of choosing at random.}
+
+\item{user.rates}{The user supplied rates to use instead of choosing categories at random.}
 }
 \description{
 Simulates nucleotide data based on parameters under the GTR+G model
 }
 \details{
 Simulates a nucleotide matrix using parameters under the GTR+G model. Note that the output can be written to a fasta file using the write.dna() function in the \code{ape} package.
-}
-\examples{
-\donttest{
-pp <- SelacOptimize(codon.data.path="FOLDER_WITH_FASTA/", phy=phy, 
-	data.type='nucleotide', optimal.aa='none', codon.model='none', nuc.model='GTR', 
-	include.gamma=TRUE, gamma.type='quadrature')
-sim.dat <- NucSimulator(phy=pp$phy, pars=pp$mle.pars, nsites=pp$nsites, nuc.model=pp$nuc.model)
-}
 }

@@ -22,7 +22,8 @@ SingleSiteUpPass <- function(phy, Q_codon, root.value){
     des <- phy$edge[,2]
     edge.length <- phy$edge.length
     for (i in N:1) {
-        p <- expm(Q_codon * edge.length[i], method="Ward77")[sim.codon.data.site[anc[i]], ]
+        p <- internal_expmt(Q_codon, edge.length[i])[[1]][sim.codon.data.site[anc[i]], ]
+        #p <- expm_squaring(Q_codon, edge.length[i], m=30)[sim.codon.data.site[anc[i]], ]
         sim.codon.data.site[des[i]] <- sample.int(dim(Q_codon)[2], size = 1, FALSE, prob = p)
     }
     sim.codon.data.site <- sim.codon.data.site[1:ntips]
@@ -356,15 +357,16 @@ SelacSimulator <- function(phy, pars, aa.optim_array, codon.freq.by.aa=NULL, cod
 #' @param nuc.optim_array A vector of optimal nucleotide for each site to be simulated.
 #' @param nuc.model Indicates what type nucleotide model to use. There are three options: "JC", "GTR", or "UNREST".
 #' @param diploid A logical indicating whether or not the organism is diploid or not.
+#' @param start.vals_array A vector of nucleotides to be used as the starting nucleotide for each site in the simulation.
 #'
 #' @details
 #' Simulates a nucleotide matrix using parameters under the SELON model. Note that the output can be written to a fasta file using the write.dna() function in the \code{ape} package.
-SelonSimulator <- function(phy, pars, nuc.optim_array, nuc.model, diploid=TRUE){
+SelonSimulator <- function(phy, pars, nuc.optim_array, nuc.model, diploid=TRUE, start.vals_array=NULL){
 
     nsites <- length(nuc.optim_array)
 
     #Start organizing the user input parameters:
-    Ne = 5e6
+    Ne = 5e4
     scalor = pars[1]/Ne
     site.index <- 1:nsites
     #position.multiplier.vector <- scalor * PositionSensitivityMultiplierSigmoid(left.slope, right.slope, mid.point, nsites)
@@ -379,31 +381,42 @@ SelonSimulator <- function(phy, pars, nuc.optim_array, nuc.model, diploid=TRUE){
         nuc.mutation.rates <- CreateNucleotideMutationMatrix(pars[7:length(pars)], model=nuc.model, base.freqs=base.freqs)
     }
     if(nuc.model == "UNREST") {
-        tmp <- CreateNucleotideMutationMatrixSpecial(pars[4:length(pars)])
-        base.freqs <- tmp$base.freq
-        nuc.mutation.rates <- tmp$nuc.mutation.rates
+        nuc.mutation.rates <- CreateNucleotideMutationMatrixSpecial(pars[4:length(pars)])
+        #base.freqs <- tmp$base.freq
+        #nuc.mutation.rates <- tmp$nuc.mutation.rates
     }
-    
+
     if(diploid == TRUE){
         ploidy = 2
     }else{
         ploidy = 1
     }
 
-    diag(nuc.mutation.rates) = 0
-    diag(nuc.mutation.rates) <- -rowSums(nuc.mutation.rates)
-    scale.factor <- -sum(diag(nuc.mutation.rates) * base.freqs)
-    nuc.mutation.rates_scaled <- nuc.mutation.rates * (1/scale.factor)
-
     #Perform simulation by looping over desired number of sites. The optimal aa for any given site is based on the user input vector of optimal AA:
     sim.nuc.data <- matrix(0, nrow=Ntip(phy), ncol=nsites)
     for(site.index in 1:nsites){
-        weight.matrix <- GetNucleotideFixationMatrix(site.index, position.multiplier=position.multiplier.vector[site.index], optimal.nucleotide=nuc.optim_array[site.index], Ne=Ne, diploid=diploid)
-        Q_position <- (ploidy * Ne) * nuc.mutation.rates_scaled * weight.matrix
-        #Rescaling Q matrix in order to have a 1 nucleotide change per site if the branch length was 1:
+        weight.matrix <- GetNucleotideFixationMatrix(position.multiplier=position.multiplier.vector[site.index], optimal.nucleotide=nuc.optim_array[site.index], Ne=Ne, diploid=diploid)
+        diag(nuc.mutation.rates) = 0
+        diag(nuc.mutation.rates) <- -rowSums(nuc.mutation.rates)
+        Q_position <- (ploidy * Ne) * nuc.mutation.rates * weight.matrix
         diag(Q_position) <- 0
         diag(Q_position) <- -rowSums(Q_position)
-        sim.nuc.data[,site.index] = SingleSiteUpPass(phy, Q_codon=Q_position, root.value=base.freqs)
+        base.freqs <- Null(Q_position)
+        #Rescale base.freqs so that they sum to 1:
+        base.freqs.scaled <- c(base.freqs/sum(base.freqs))
+
+        scale.factor <- -sum(diag(Q_position) * base.freqs.scaled)
+
+        #Rescaling Q matrix in order to have a 1 nucleotide change per site if the branch length was 1:
+        Q_position_scaled <- Q_position * (1/scale.factor)
+
+        if(is.null(start.vals_array)){
+            sim.nuc.data[,site.index] = SingleSiteUpPass(phy, Q_codon=Q_position_scaled, root.value=base.freqs.scaled)
+        }else{
+            initial.val <- numeric(4)
+            initial.val[start.vals_array[site.index]] <- 1
+            sim.nuc.data[,site.index] = SingleSiteUpPass(phy, Q_codon=Q_position_scaled, root.value=initial.val)
+        }
     }
     nuc.names <- n2s(0:3)
     #Finally, translate this information into a matrix of nucleotides -- this format allows for write.dna() to write a fasta formatted file:
@@ -428,11 +441,16 @@ SelonSimulator <- function(phy, pars, nuc.optim_array, nuc.model, diploid=TRUE){
 #' @param nsites The number of sites to simulate.
 #' @param nuc.model Indicates what type nucleotide model to use. There are three options: "JC", "GTR", or "UNREST".
 #' @param base.freqs The base frequencies for A C G T (in that order).
+#' @param include.gamma Boolean on whether to use a gamma model
+#' @param gamma.type How the gamma bins are used
 #' @param ncats The number of discrete gamma categories.
+#' @param start.vals_array A vector of nucleotides to be used as the starting nucleotide for each site in the simulation.
+#' @param user.rate.cats The user supplied gamma categories to use instead of choosing at random.
+#' @param user.rates The user supplied rates to use instead of choosing categories at random.
 #'
 #' @details
 #' Simulates a nucleotide matrix using parameters under the GTR+G model. Note that the output can be written to a fasta file using the write.dna() function in the \code{ape} package.
-NucSimulator <- function(phy, pars, nsites, nuc.model, base.freqs, ncats){
+NucSimulator <- function(phy, pars, nsites, nuc.model, base.freqs, include.gamma=TRUE, gamma.type="median", ncats=4, start.vals_array=NULL, user.rate.cats=NULL, user.rates=NULL){
 
     if(nuc.model == "JC") {
         base.freqs=base.freqs
@@ -443,21 +461,63 @@ NucSimulator <- function(phy, pars, nsites, nuc.model, base.freqs, ncats){
         nuc.mutation.rates <- CreateNucleotideMutationMatrix(pars[2:6], model=nuc.model, base.freqs=base.freqs)
     }
     if(nuc.model == "UNREST") {
-        nuc.mutation.rates <- CreateNucleotideMutationMatrix(pars, model=nuc.model)
+        nuc.mutation.rates <- CreateNucleotideMutationMatrix(pars[2:12], model=nuc.model)
     }
 
-    Q_mat <- nuc.mutation.rates
-    diag(Q_mat) = 0
-    diag(Q_mat) <- -rowSums(Q_mat)
+    diag(nuc.mutation.rates) = 0
+    diag(nuc.mutation.rates) <- -rowSums(nuc.mutation.rates)
+    scale.factor <- -sum(diag(nuc.mutation.rates) * base.freqs)
+    Q_mat <- nuc.mutation.rates * (1/scale.factor)
 
-    rate.vector <- DiscreteGamma(pars[1], ncats)
-    rate.indicator <- sample.int(dim(Q_mat)[2], nsites, TRUE, prob=rep(1/ncats, ncats))
-    # Perform simulation by looping over desired number of sites. The optimal aa for any given site is based on the user input vector of optimal AA:
-    sim.nuc.data <- matrix(0, nrow=Ntip(phy), ncol=nsites)
-    for(site in 1:nsites){
-        Q_tmp <- Q_mat * rate.vector[rate.indicator[site]]
-        sim.nuc.data[,site] = SingleSiteUpPass(phy, Q_codon=Q_tmp, root.value=base.freqs)
+    if(include.gamma == TRUE){
+        if(gamma.type == "median"){
+            rate.vector <- DiscreteGamma(pars[1], ncats)
+            weights.k <- rep(1/ncats, ncats)
+            rate.indicator <- sample.int(dim(Q_mat)[2], nsites, TRUE, prob=weights.k)
+            if(!is.null(user.rate.cats)){
+                rate.indicator <- user.rate.cats
+            }else{
+                rate.indicator <- sample.int(dim(Q_mat)[2], nsites, TRUE, prob=weights.k)
+            }
+        }
+        if(gamma.type == "quadrature"){
+            rates.and.weights <- LaguerreQuad(shape=pars[1], ncats=ncats)
+            rate.vector <- rates.and.weights[1:ncats]
+            weights.k <- rates.and.weights[(ncats+1):(ncats*2)]
+            if(!is.null(user.rate.cats)){
+                rate.indicator <- user.rate.cats
+            }else{
+                rate.indicator <- sample.int(dim(Q_mat)[2], nsites, TRUE, prob=weights.k)
+            }
+        }
+        # Perform simulation by looping over desired number of sites. The optimal aa for any given site is based on the user input vector of optimal AA:
+        sim.nuc.data <- matrix(0, nrow=Ntip(phy), ncol=nsites)
+        for(site in 1:nsites){
+            if(!is.null(user.rates)){
+                Q_tmp <- Q_mat * user.rates[site]
+            }else{
+                Q_tmp <- Q_mat * rate.vector[rate.indicator[site]]
+            }
+            if(is.null(start.vals_array)){
+                sim.nuc.data[,site] = SingleSiteUpPass(phy, Q_codon=Q_tmp, root.value=base.freqs)
+            }else{
+                start.site <- start.vals_array[site,]
+                sim.nuc.data[,site] = SingleSiteUpPass(phy, Q_codon=Q_tmp, root.value=start.site)
+            }
+        }
+    }else{
+        # Perform simulation by looping over desired number of sites. The optimal aa for any given site is based on the user input vector of optimal AA:
+        sim.nuc.data <- matrix(0, nrow=Ntip(phy), ncol=nsites)
+        for(site in 1:nsites){
+            if(is.null(start.vals_array)){
+                sim.nuc.data[,site] = SingleSiteUpPass(phy, Q_codon=Q_mat, root.value=base.freqs)
+            }else{
+                start.site <- start.vals_array[site,]
+                sim.nuc.data[,site] = SingleSiteUpPass(phy, Q_codon=Q_tmp, root.value=start.site)
+            }
+        }
     }
+
     nuc.names <- n2s(0:3)
     # Finally, translate this information into a matrix of nucleotides -- this format allows for write.dna() to write a fasta formatted file:
     nucleotide.data <- c()
